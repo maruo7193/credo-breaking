@@ -142,6 +142,35 @@ button:focus-visible{outline:3px solid var(--green);outline-offset:2px}
   animation:pulse 1s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:.45;transform:scale(.98)}50%{opacity:1;transform:scale(1.02)}}
 
+/* ===== 優勝演出 ===== */
+#fx{position:fixed;inset:0;pointer-events:none;z-index:80}
+#roll{position:fixed;inset:0;z-index:90;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:22px;
+  background:radial-gradient(circle at 50% 45%, rgba(0,232,123,.13), rgba(4,12,8,.97) 60%)}
+#roll .t{font-family:var(--jp);font-size:clamp(30px,8vw,74px);color:#fff;text-align:center;
+  text-shadow:0 0 44px rgba(0,232,123,.7),3px 3px 0 #04140c;
+  animation:shake .09s linear infinite}
+#roll .d{display:flex;gap:14px}
+#roll .d i{width:16px;height:16px;border-radius:50%;background:var(--green);display:block;
+  animation:bump .5s ease-in-out infinite}
+#roll .d i:nth-child(2){animation-delay:.16s}
+#roll .d i:nth-child(3){animation-delay:.32s}
+@keyframes shake{0%{transform:translate(0,0)}25%{transform:translate(-2px,1px)}
+  50%{transform:translate(2px,-1px)}75%{transform:translate(-1px,-2px)}100%{transform:translate(1px,2px)}}
+@keyframes bump{0%,100%{transform:translateY(0);opacity:.35}50%{transform:translateY(-16px);opacity:1}}
+
+.reveal.win{animation:slam .5s cubic-bezier(.15,1.7,.4,1) both}
+@keyframes slam{0%{opacity:0;transform:scale(2.2) rotate(-3deg)}
+  60%{opacity:1;transform:scale(.94) rotate(.6deg)}100%{opacity:1;transform:none}}
+.reveal.win{border-width:4px;box-shadow:0 0 90px rgba(0,232,123,.5),0 0 0 1px rgba(0,232,123,.4) inset;
+  animation:slam .5s cubic-bezier(.15,1.7,.4,1) both, winglow 1.8s ease-in-out .5s infinite}
+@keyframes winglow{0%,100%{box-shadow:0 0 70px rgba(0,232,123,.4)}50%{box-shadow:0 0 120px rgba(0,232,123,.75)}}
+.reveal.win .nm{font-size:clamp(30px,6.4vw,58px)}
+.reveal.win .pt{font-size:clamp(34px,7vw,64px)}
+.flash{position:fixed;inset:0;background:#fff;z-index:85;pointer-events:none;
+  animation:flash .45s ease-out forwards}
+@keyframes flash{0%{opacity:.85}100%{opacity:0}}
+
 .foot{margin-top:34px;padding-top:16px;border-top:2px solid var(--line);
   font-family:var(--disp);font-size:10px;letter-spacing:.14em;color:var(--faint);
   display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
@@ -265,6 +294,12 @@ html{overflow-x:hidden}
   <span>TEAM 2012 — 情熱を背中で見せる一年へ</span>
   <span id="conn">—</span>
 </div>
+</div>
+
+<canvas id="fx" hidden></canvas>
+<div id="roll" hidden>
+  <div class="t" id="rollText">優勝は……</div>
+  <div class="d"><i></i><i></i><i></i></div>
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
@@ -504,25 +539,11 @@ function aggregate(data){
   return out;
 }
 
-function nextReveal(){
-  const stage = $("#stage"), btn = $("#nextBtn");
-  const n = rows.length;
-  if (step === 0){
-    stage.innerHTML = '<div class="drum">結果発表</div>';
-    btn.textContent = "第" + n + "位から発表";
-    step = 1; return;
-  }
-  const idx = n - (step - 1) - 1;   // 最下位 → 1位
-  if (idx < 0){
-    btn.textContent = "おわり";
-    btn.disabled = true;
-    return;
-  }
-  const r = rows[idx], pos = idx + 1;
-  if (step === 1) stage.innerHTML = "";
+const REDUCED = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function makeCard(r, pos, win){
   const d = document.createElement("div");
-  d.className = "reveal" + (pos === 1 ? " first" : "");
-  const avg = r.voters ? (r.total / (r.voters * 3)) : 0;
+  d.className = "reveal" + (pos === 1 ? " first" : "") + (win ? " win" : "");
   d.innerHTML =
     (pos === 1 ? '<div class="crown">WINNER</div>' : '') +
     (r.spike ? '<div class="spike">5点あり／尖り案</div>' : '') +
@@ -531,13 +552,130 @@ function nextReveal(){
       AXES.map((a,i) => '<div>' + esc(a.label.replace("？","")) + ' <b>' +
         (r.per[i].n ? (r.per[i].s / r.per[i].n).toFixed(1) : "—") + '</b></div>').join("") +
     '</div></div>' +
-    '<div class="pt">' + r.total + '<span> 点</span></div>';
-  stage.prepend(d);
-  d.scrollIntoView({behavior:"smooth", block:"center"});
+    '<div class="pt"><span class="num">' + (win ? 0 : r.total) + '</span><span> 点</span></div>';
+  return d;
+}
+
+function countUp(el, to, ms){
+  el.textContent = to;              // まず確定値。動かなくても点数は必ず出る
+  let t0 = null;
+  requestAnimationFrame(function tick(t){
+    if (t0 === null) t0 = t;
+    const p = Math.max(0, Math.min(1, (t - t0) / ms));
+    el.textContent = Math.round(to * (1 - Math.pow(1 - p, 3)));
+    if (p < 1) requestAnimationFrame(tick);
+    else el.textContent = to;
+  });
+  setTimeout(() => { el.textContent = to; }, ms + 400);   // 保険
+}
+
+function nextReveal(){
+  const stage = $("#stage"), btn = $("#nextBtn");
+  const n = rows.length;
+  if (!n) return;
+
+  if (step === 0){
+    stage.innerHTML = '<div class="drum">結果発表</div>';
+    btn.textContent = "第" + n + "位から発表";
+    step = 1; return;
+  }
+  const idx = n - (step - 1) - 1;   // 最下位 → 1位
+  if (idx < 0){ btn.textContent = "おわり"; btn.disabled = true; return; }
+
+  const r = rows[idx], pos = idx + 1;
+  if (step === 1) stage.innerHTML = "";
   step++;
   const nextPos = n - (step - 1);
-  btn.textContent = nextPos >= 1 ? ("第" + nextPos + "位") : "おわり";
-  if (nextPos === 1) btn.textContent = "🏆 優勝は…";
+
+  if (pos !== 1){
+    const d = makeCard(r, pos, false);
+    stage.prepend(d);
+    d.scrollIntoView({behavior:"smooth", block:"center"});
+    btn.textContent = nextPos === 1 ? "🏆 優勝は…" : ("第" + nextPos + "位");
+    return;
+  }
+
+  /* ---------- 優勝発表 ---------- */
+  btn.disabled = true;
+  btn.textContent = "…";
+  const place = () => {
+    const d = makeCard(r, 1, true);
+    stage.prepend(d);
+    d.scrollIntoView({behavior:"smooth", block:"center"});
+    const num = d.querySelector(".num");
+    if (REDUCED){ num.textContent = r.total; }
+    else {
+      const f = document.createElement("div"); f.className = "flash";
+      document.body.appendChild(f); setTimeout(() => f.remove(), 500);
+      countUp(num, r.total, 1100);
+      confetti(7000);
+    }
+    btn.textContent = "おわり";
+  };
+  if (REDUCED){ place(); return; }
+  const roll = $("#roll");
+  $("#rollText").textContent = "優勝は……";
+  roll.hidden = false;
+  setTimeout(() => { roll.hidden = true; place(); }, 2400);
+}
+
+/* ---------- 紙吹雪 ---------- */
+function confetti(ms){
+  const c = $("#fx"); if (!c) return;
+  const ctx = c.getContext("2d");
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const fit = () => {
+    c.width = innerWidth * dpr; c.height = innerHeight * dpr;
+    c.style.width = innerWidth + "px"; c.style.height = innerHeight + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+  c.hidden = false; fit();
+  window.addEventListener("resize", fit);
+
+  const COL = ["#00e87b","#5cffb0","#ffc53d","#ffffff","#7cffc4","#0a5c3a"];
+  const P = [];
+  const push = (x,y,vx,vy) => P.push({
+    x, y, vx, vy,
+    w: 6 + Math.random()*7, h: 9 + Math.random()*12,
+    rot: Math.random()*Math.PI*2, vr: (Math.random()-.5)*.3,
+    c: COL[(Math.random()*COL.length)|0]
+  });
+  const cannon = (ox, oy, dir) => {
+    for (let i=0; i<110; i++){
+      const sp = 9 + Math.random()*15;
+      const a  = (Math.random()*0.9) + 0.25;              // 上向きの広がり
+      push(ox, oy, Math.cos(a)*sp*dir, -Math.sin(a)*sp - Math.random()*6);
+    }
+  };
+  const rain = (n) => {
+    for (let i=0; i<n; i++)
+      push(Math.random()*innerWidth, -30 - Math.random()*innerHeight*0.6,
+           (Math.random()-.5)*2, 2.5 + Math.random()*3.5);
+  };
+  cannon(0, innerHeight, 1);
+  cannon(innerWidth, innerHeight, -1);
+  rain(150);
+  setTimeout(() => rain(120), 900);
+  setTimeout(() => { cannon(innerWidth*0.5, innerHeight, 1); cannon(innerWidth*0.5, innerHeight, -1); }, 1500);
+
+  let t0 = null;
+  requestAnimationFrame(function loop(t){
+    if (t0 === null) t0 = t;
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    for (let i = P.length - 1; i >= 0; i--){
+      const p = P[i];
+      p.vy += 0.3; p.vx *= 0.992; p.vy *= 0.992;
+      p.x += p.vx; p.y += p.vy; p.rot += p.vr;
+      if (p.y > innerHeight + 60){ P.splice(i,1); continue; }
+      ctx.save();
+      ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.fillStyle = p.c;
+      ctx.fillRect(-p.w/2, -p.h/2, p.w, p.h * (0.55 + 0.45*Math.abs(Math.cos(p.rot*1.7))));
+      ctx.restore();
+    }
+    if (t - t0 < ms && P.length) requestAnimationFrame(loop);
+    else { ctx.clearRect(0,0,innerWidth,innerHeight); c.hidden = true; }
+  });
 }
 </script>
 </body>
