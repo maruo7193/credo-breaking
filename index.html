@@ -101,6 +101,8 @@ button:focus-visible{outline:3px solid var(--green);outline-offset:2px}
 .sw button[aria-pressed=true]{background:var(--green);border-color:var(--green);color:#06301c}
 .sw button[aria-pressed=true][data-v="5"]{background:var(--amber);border-color:var(--amber);color:#2b1c00;
   box-shadow:0 0 20px rgba(255,197,61,.5)}
+.anchor{display:flex;justify-content:space-between;gap:10px;margin-top:6px;font-family:var(--jp);font-size:12.5px;color:var(--faint)}
+.anchor span:last-child{color:var(--amber);text-align:right}
 .mytot{font-family:var(--mono);font-size:13px;color:var(--faint);margin-top:14px;text-align:right}
 .mytot b{color:var(--green);font-size:22px}
 
@@ -307,9 +309,9 @@ html{overflow-x:hidden}
 <script>
 "use strict";
 const AXES = [
-  {no:"01", label:"ワクワクするか？"},
-  {no:"02", label:"自社の強みか？"},
-  {no:"03", label:"これまでにないか？"}
+  {no:"01", label:"ワクワクするか？",   lo:"ふーん…",           hi:"めちゃくちゃワクワク！"},
+  {no:"02", label:"自社の強みか？",     lo:"どの会社でもできる", hi:"うちにしかできない"},
+  {no:"03", label:"これまでにないか？", lo:"もう世の中にある",   hi:"見たことがない！"}
 ];
 const DEFAULT_MEMBERS = ["野田","丸尾","前田","北口","一村","快勝院"];
 const DEFAULT_IDEAS   = ["","","","","",""];
@@ -325,7 +327,7 @@ const IDEAS   = (P.get("i") || "").split("|").filter(Boolean);
 const MEMBERS = (P.get("m") || "").split("|").filter(Boolean);
 const IS_HOST = P.get("h") === "1";
 
-let db = null, myIdx = -1, marks = [], sent = false;
+let db = null, myIdx = -1, marks = [], sent = false, pickSeq = 0;
 
 /* ---------- Firebase ---------- */
 function configOK(){
@@ -417,16 +419,29 @@ function play(){
 }
 
 function chooseMe(i){
+  const seq = ++pickSeq;
   myIdx = i;
-  try{ localStorage.setItem("cb-fj-" + ROOM, String(i)); }catch(e){}
+  let mine = false;
+  try{
+    /* 「この端末で送信した人」だけが、自分の点数を呼び戻せる */
+    mine = localStorage.getItem("cb-fj-own-" + ROOM) === String(i);
+    localStorage.setItem("cb-fj-" + ROOM, String(i));
+  }catch(e){}
+  /* 誰を選んでも、まずまっさらな採点表から始める */
+  marks = IDEAS.map(() => [0,0,0]);
+  sent  = false;
   $$("#whoPick button").forEach((b,j) => b.setAttribute("aria-pressed", j === i));
   $("#playTitle").innerHTML = esc(MEMBERS[i]) + ' さんの<em>採点</em>';
   renderScore();
   $("#scoreBox").hidden = false;
   $("#sendBox").hidden  = false;
-  if (db) db.ref("rooms/"+ROOM+"/scores/"+i).once("value").then(s => {
+  /* 続きから直せるのは「この端末で送信した自分の分」だけ */
+  if (db && mine) db.ref("rooms/"+ROOM+"/scores/"+i).once("value").then(s => {
+    if (seq !== pickSeq || myIdx !== i) return;
     const v = s.val();
-    if (v && Array.isArray(v.s)){ marks = v.s.map(a => a.slice()); sent = true; renderScore(); paintSend(); }
+    if (v && Array.isArray(v.s) && v.s.length === IDEAS.length){
+      marks = v.s.map(a => a.slice()); sent = true; renderScore(); paintSend();
+    }
   }).catch(()=>{});
 }
 
@@ -452,7 +467,9 @@ function renderScore(){
         });
         sw.appendChild(b);
       }
-      ax.append(lb, sw); c.appendChild(ax);
+      const an = document.createElement("div"); an.className = "anchor";
+      an.innerHTML = '<span>1＝'+esc(a.lo)+'</span><span>5＝'+esc(a.hi)+'</span>';
+      ax.append(lb, sw, an); c.appendChild(ax);
     });
     const t = marks[ii].reduce((x,y)=>x+y,0);
     const tt = document.createElement("div"); tt.className = "mytot";
@@ -479,6 +496,7 @@ function send(){
     n: MEMBERS[myIdx], s: marks, t: Date.now()
   }).then(() => {
     sent = true;
+    try{ localStorage.setItem("cb-fj-own-" + ROOM, String(myIdx)); }catch(e){}
     $("#sendNote").textContent = "送信しました！ありがとうございます🔥";
     paintSend();
   }).catch(e => {
